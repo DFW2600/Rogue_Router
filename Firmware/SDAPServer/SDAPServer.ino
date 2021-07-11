@@ -37,25 +37,34 @@
 #include <SD.h>
 
 const char WiFiAPPSK[] = "";
+const char ONIONNODE[] = "e2ro3ow3awo7r2favn24n65ycc2qmzkoayn5r57e3f56nvjwdcgg32ad.onion";
 
 const byte DNS_PORT = 53;
-IPAddress apIP(192, 168, 1, 1);
+IPAddress apIP(192, 168, 100, 1);
 DNSServer dnsServer;
 ESP8266WebServer server(80);
 
 static bool hasSD = false;
 File uploadFile;
 
+void secureHdrs() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Alt-Svc", "h2="+ONIONNODE+":80 ma=2592000; persist=1");
+  server.sendHeader("Strict-Transport-Security", "max-age=31536000");
+  server.sendHeader("Content-Security-Policy", "default-src 'self' img-src 'self' script-src 'self'");
+  server.sendHeader("Cross-Origin-Resource-Policy", "same-origin");
+  server.sendHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+}
 
 void returnOK() {
   server.sendHeader("Connection", "close");
-  server.sendHeader("Access-Control-Allow-Origin", "*");
+  secureHdrs();
   server.send(200, "text/plain", "");
 }
 
 void returnFail(String msg) {
   server.sendHeader("Connection", "close");
-  server.sendHeader("Access-Control-Allow-Origin", "*");
+  secureHdrs();
   server.send(500, "text/plain", msg + "\r\n");
 }
 
@@ -72,6 +81,7 @@ bool loadFromSdCard(String path){
   else if(path.endsWith(".jpg")) dataType = "image/jpeg";
   else if(path.endsWith(".ico")) dataType = "image/x-icon";
   else if(path.endsWith(".xml")) dataType = "text/xml";
+  else if(path.endsWith(".rss")) dataType = "application/rss+xml";
   else if(path.endsWith(".pdf")) dataType = "application/pdf";
   else if(path.endsWith(".zip")) dataType = "application/zip";
 
@@ -216,6 +226,9 @@ void setup(void){
   
   server.begin();
 
+  server.on("/generate_204", handleRoot);  //Android captive portal. Maybe not needed. Might be handled by notFound handler.
+  server.on("/fwlink", handleRoot);  //Microsoft captive portal. Maybe not needed. Might be handled by notFound handler.
+
   server.on("/list", HTTP_GET, printDirectory);
   server.on("/edit", HTTP_DELETE, handleDelete);
   server.on("/edit", HTTP_PUT, handleCreate);
@@ -228,7 +241,6 @@ void setup(void){
   server.begin();
 
   if (SD.begin(SS)){
-
      hasSD = true;
   }
 }
@@ -244,7 +256,7 @@ void setupWiFi()
   String macID = String(mac[WL_MAC_ADDR_LENGTH - 2], HEX) +
                  String(mac[WL_MAC_ADDR_LENGTH - 1], HEX);
   macID.toUpperCase();
-  String AP_NameString = "R0gue_Mini #" + macID;
+  String AP_NameString = "EMC Node #" + macID;
 
   char AP_NameChar[AP_NameString.length() + 1];
   memset(AP_NameChar, 0, AP_NameString.length() + 1);
@@ -254,14 +266,22 @@ void setupWiFi()
 
   WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
   WiFi.softAP(AP_NameChar, WiFiAPPSK);
+    
+  dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+  dnsServer.start(DNS_PORT, "*", apIP);
 
-  dnsServer.start(DNS_PORT, "*", apIP);  
+  if (!MDNS.begin("emc-node-" + macID + ".local")) {
+    Serial.println("Error setting up MDNS responder!");
+  } else {
+    Serial.println("mDNS responder started");
+    // Add service to MDNS-SD
+    MDNS.addService("http", "tcp", 80);
+  }
   
 }
 
 void loop(void){
+  MDNS.update();
   dnsServer.processNextRequest();
   server.handleClient();
 }
-
-
